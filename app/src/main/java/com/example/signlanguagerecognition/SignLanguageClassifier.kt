@@ -26,6 +26,7 @@ class SignLanguageClassifier(private val context: Context) {
     private var sequenceLength: Int = 30
     private var featureSize: Int = 1662
     private var frameBuffer: ConcurrentLinkedQueue<FloatArray> = ConcurrentLinkedQueue()
+    private var mediaPipeExtractor: MediaPipeFeatureExtractor? = null
     
     // Labels for sign language - you should replace these with your actual labels
     private val labels = listOf(
@@ -34,6 +35,17 @@ class SignLanguageClassifier(private val context: Context) {
     
     init {
         setupInterpreter()
+        setupMediaPipe()
+    }
+    
+    private fun setupMediaPipe() {
+        try {
+            mediaPipeExtractor = MediaPipeFeatureExtractor(context)
+            mediaPipeExtractor?.initialize()
+            Log.d("SignLanguageClassifier", "MediaPipe feature extractor initialized")
+        } catch (e: Exception) {
+            Log.e("SignLanguageClassifier", "Failed to initialize MediaPipe: ${e.message}", e)
+        }
     }
     
     private fun setupInterpreter() {
@@ -150,29 +162,21 @@ class SignLanguageClassifier(private val context: Context) {
     }
     
     private fun extractFeaturesFromBitmap(bitmap: Bitmap): FloatArray {
-        // Placeholder feature extraction - replace with your actual preprocessing
-        // This could be:
-        // 1. Hand/body keypoint detection (MediaPipe, OpenPose)
-        // 2. CNN feature extraction
-        // 3. Custom feature engineering
-        // 4. Pose estimation coordinates
-        
-        // For now, creating a dummy feature vector
-        // TODO: Replace with your actual feature extraction logic
+        // Use MediaPipe for feature extraction (matches your training data)
+        return mediaPipeExtractor?.extractFeatures(bitmap) ?: run {
+            Log.w("SignLanguageClassifier", "MediaPipe extractor not available, using fallback")
+            createFallbackFeatures()
+        }
+    }
+    
+    private fun createFallbackFeatures(): FloatArray {
+        Log.w("SignLanguageClassifier", "Using fallback feature extraction")
         val features = FloatArray(featureSize)
         
-        // Example: Simple pixel-based features (replace with your method)
-        val resizedBitmap = Bitmap.createScaledBitmap(bitmap, 42, 42, true) // sqrt(1662) ≈ 41
-        val pixels = IntArray(42 * 42)
-        resizedBitmap.getPixels(pixels, 0, 42, 0, 0, 42, 42)
-        
-        for (i in 0 until minOf(pixels.size, featureSize)) {
-            val pixel = pixels[i]
-            // Convert to grayscale and normalize
-            val gray = (0.299 * ((pixel shr 16) and 0xFF) + 
-                       0.587 * ((pixel shr 8) and 0xFF) + 
-                       0.114 * (pixel and 0xFF)) / 255.0
-            features[i] = gray.toFloat()
+        // Create small random features as fallback when MediaPipe fails
+        val random = kotlin.random.Random.Default
+        for (i in features.indices) {
+            features[i] = random.nextFloat() * 0.2f - 0.1f
         }
         
         return features
@@ -419,6 +423,7 @@ class SignLanguageClassifier(private val context: Context) {
     
     fun close() {
         interpreter?.close()
+        mediaPipeExtractor?.release()
         frameBuffer.clear()
     }
 }
