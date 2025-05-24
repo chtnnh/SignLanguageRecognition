@@ -1,14 +1,37 @@
 # Sign Language Recognition Android App
 
-This Android app uses camera to capture sign language gestures and provides real-time recognition using a TensorFlow Lite model.
+This Android app uses camera to capture sign language gestures and provides real-time recognition using a TensorFlow Lite model. **Updated to handle feature sequences of 30 frames with 1662-dimensional feature vectors.**
 
 ## Features
 
 - Camera permission handling
-- Real-time camera preview
+- Real-time camera preview with feature extraction
 - Video recording functionality
+- **Feature sequence processing (30 vectors of 1662 dimensions)**
 - TensorFlow Lite model integration for sign language recognition
-- Real-time prediction display
+- **Real-time prediction with feature buffer management**
+- **Video file selection and processing**
+- Frame counter display
+
+## Model Requirements
+
+Your TensorFlow Lite model should expect:
+- **Input shape: [30, 1662]** (30 frames, 1662 features per frame)
+- **30 consecutive feature vectors** from sign language video
+- **Feature vector size: 1662 dimensions**
+- **Preprocessed feature data** (not raw pixels)
+
+## ⚠️ **IMPORTANT: Feature Extraction Required**
+
+The app currently uses a **placeholder feature extraction method**. You need to implement the actual feature extraction in `SignLanguageClassifier.kt` that matches your model's preprocessing pipeline.
+
+Common approaches for 1662-dimensional features:
+- **MediaPipe Hand/Pose keypoints** + derived features
+- **CNN feature extraction** from pre-trained networks  
+- **Hand-crafted features** (HOG, LBP, motion features)
+- **Pose estimation** with augmented features
+
+See `FEATURE_EXTRACTION_GUIDE.md` for detailed implementation guidance.
 
 ## Setup Instructions
 
@@ -19,7 +42,7 @@ This Android app uses camera to capture sign language gestures and provides real
 
 ### 2. Update Model Labels
 
-In `SignLanguageClassifier.kt`, update the `labels` list to match your model's output classes:
+In `SignLanguageClassifier.kt`, update the `labels` list to match your model's output classes.
 
 ```kotlin
 private val labels = listOf(
@@ -48,14 +71,30 @@ private var inputImageHeight: Int = 224 // Change to your model's height
 ## Usage
 
 1. **Grant Permissions**: App will request camera and microphone permissions
-2. **Real-time Recognition**: Point camera at sign language gestures to see predictions
+
+2. **Real-time Recognition**: 
+   - Tap "Start Prediction" to begin collecting frames
+   - Point camera at sign language gestures
+   - App collects 30 frames before making prediction
+   - Each frame is resized to 300x1662 pixels
+   - Prediction appears once 30 frames are collected
+
 3. **Video Recording**: Tap "Start Recording" to record sign language videos
-4. **Prediction Display**: Real-time predictions appear in the text area
+
+4. **Video File Processing**: 
+   - Tap "Select Video File" to choose existing video
+   - App extracts exactly 30 frames from the video
+   - Frames are resized to 300x1662 and processed by the model
+
+5. **Frame Management**: 
+   - Use "Clear Frame Buffer" to reset collected frames
+   - Frame counter shows progress (0/30 to 30/30)
 
 ## Key Components
 
 - **MainActivity.kt**: Main activity handling camera setup and UI
-- **SignLanguageClassifier.kt**: TensorFlow Lite model wrapper for inference
+- **SignLanguageClassifier.kt**: TensorFlow Lite model wrapper for video sequence inference
+- **VideoProcessor.kt**: Handles video file processing and frame extraction
 - **activity_main.xml**: UI layout with camera preview and controls
 
 ## Requirements

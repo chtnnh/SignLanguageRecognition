@@ -4,5 +4,7 @@
     <string name="start_capture">Start Recording</string>
     <string name="stop_capture">Stop Recording</string>
     <string name="predict">Start Prediction</string>
-    <string name="prediction_placeholder">Point camera at sign language gesture</string>
+    <string name="prediction_placeholder">Start prediction to collect 30 feature vectors of size 1662</string>
+    <string name="clear_frames">Clear Frame Buffer</string>
+    <string name="select_video">Select Video File</string>
 </resources>

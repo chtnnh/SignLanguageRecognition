@@ -2,7 +2,9 @@ package com.example.signlanguagerecognition
 
 import android.Manifest
 import android.content.ContentValues
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
@@ -26,7 +28,9 @@ import androidx.camera.video.VideoRecordEvent
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.PermissionChecker
+import androidx.lifecycle.lifecycleScope
 import com.example.signlanguagerecognition.databinding.ActivityMainBinding
+import kotlinx.coroutines.launch
 import java.nio.ByteBuffer
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -53,14 +57,18 @@ class MainActivity : AppCompatActivity() {
     private var recording: Recording? = null
     private lateinit var cameraExecutor: ExecutorService
     private lateinit var signLanguageClassifier: SignLanguageClassifier
+    private lateinit var videoProcessor: VideoProcessor
+    private var isRealTimePredictionEnabled = false
+    private var frameProcessingInterval = 3 // Process every 3rd frame to reduce load
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         viewBinding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(viewBinding.root)
         
-        // Initialize TensorFlow Lite model
+        // Initialize TensorFlow Lite model and video processor
         signLanguageClassifier = SignLanguageClassifier(this)
+        videoProcessor = VideoProcessor(this)
         
         // Request camera permissions
         if (allPermissionsGranted()) {
@@ -72,8 +80,13 @@ class MainActivity : AppCompatActivity() {
         // Set up the listeners for video recording and prediction buttons
         viewBinding.videoCaptureButton.setOnClickListener { captureVideo() }
         viewBinding.predictButton.setOnClickListener { 
-            // Start real-time prediction
-            startRealTimePrediction()
+            toggleRealTimePrediction()
+        }
+        viewBinding.clearButton.setOnClickListener {
+            clearFrameBuffer()
+        }
+        viewBinding.selectVideoButton.setOnClickListener {
+            selectVideoFile()
         }
         
         cameraExecutor = Executors.newSingleThreadExecutor()
@@ -188,20 +201,96 @@ class MainActivity : AppCompatActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
     
+    private var frameCounter = 0
+    
     private fun analyzeImage(image: ImageProxy) {
+        // Only process frames when real-time prediction is enabled
+        if (!isRealTimePredictionEnabled) {
+            image.close()
+            return
+        }
+        
+        // Process every nth frame to reduce computational load
+        frameCounter++
+        if (frameCounter % frameProcessingInterval != 0) {
+            image.close()
+            return
+        }
+        
         // Convert ImageProxy to bitmap and run inference
         val result = signLanguageClassifier.classify(image)
         
         runOnUiThread {
-            viewBinding.predictionText.text = "Prediction: $result"
+            viewBinding.predictionText.text = result
+            viewBinding.frameCountText.text = "Frames collected: ${signLanguageClassifier.getFrameCount()}/30"
         }
         
         image.close()
     }
     
-    private fun startRealTimePrediction() {
-        // This method can be used to enable/disable real-time prediction
-        Toast.makeText(this, "Real-time prediction started", Toast.LENGTH_SHORT).show()
+    private fun toggleRealTimePrediction() {
+        isRealTimePredictionEnabled = !isRealTimePredictionEnabled
+        
+        if (isRealTimePredictionEnabled) {
+            viewBinding.predictButton.text = "Stop Prediction"
+            viewBinding.predictButton.backgroundTintList = 
+                ContextCompat.getColorStateList(this, R.color.design_default_color_error)
+            signLanguageClassifier.clearFrameBuffer()
+            Toast.makeText(this, "Real-time prediction started - collecting 30 frames", Toast.LENGTH_SHORT).show()
+        } else {
+            viewBinding.predictButton.text = "Start Prediction"
+            viewBinding.predictButton.backgroundTintList = 
+                ContextCompat.getColorStateList(this, R.color.design_default_color_primary)
+            Toast.makeText(this, "Real-time prediction stopped", Toast.LENGTH_SHORT).show()
+        }
+    }
+    
+    private fun clearFrameBuffer() {
+        signLanguageClassifier.clearFrameBuffer()
+        runOnUiThread {
+            viewBinding.predictionText.text = "Frame buffer cleared"
+            viewBinding.frameCountText.text = "Frames collected: 0/30"
+        }
+        Toast.makeText(this, "Frame buffer cleared", Toast.LENGTH_SHORT).show()
+    }
+    
+    private fun selectVideoFile() {
+        val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+            type = "video/*"
+            addCategory(Intent.CATEGORY_OPENABLE)
+        }
+        videoPickerLauncher.launch(intent)
+    }
+    
+    private val videoPickerLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK) {
+            result.data?.data?.let { videoUri ->
+                processSelectedVideo(videoUri)
+            }
+        }
+    }
+    
+    private fun processSelectedVideo(videoUri: Uri) {
+        viewBinding.predictionText.text = "Processing video..."
+        viewBinding.frameCountText.text = "Extracting 30 frames from video..."
+        
+        lifecycleScope.launch {
+            try {
+                val result = videoProcessor.processVideoFile(videoUri, signLanguageClassifier)
+                
+                runOnUiThread {
+                    viewBinding.predictionText.text = "Video Result: $result"
+                    viewBinding.frameCountText.text = "Video processing completed"
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    viewBinding.predictionText.text = "Error processing video: ${e.message}"
+                    viewBinding.frameCountText.text = "Video processing failed"
+                }
+            }
+        }
     }
     
     private fun requestPermissions() {

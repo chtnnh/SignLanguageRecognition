@@ -66,6 +66,10 @@ dependencies {
     // Permission handling
     implementation 'com.karumi:dexter:6.2.3'
     
+    // Coroutines for async operations
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
+    implementation 'androidx.lifecycle:lifecycle-viewmodel-ktx:2.7.0'
+    
     // Testing dependencies
     testImplementation 'junit:junit:4.13.2'
     androidTestImplementation 'androidx.test.ext:junit:1.1.5'
