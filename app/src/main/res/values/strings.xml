@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Sign Language Recognition</string>
+    <string name="start_capture">Start Recording</string>
+    <string name="stop_capture">Stop Recording</string>
+    <string name="predict">Start Prediction</string>
+    <string name="prediction_placeholder">Point camera at sign language gesture</string>
+</resources>
