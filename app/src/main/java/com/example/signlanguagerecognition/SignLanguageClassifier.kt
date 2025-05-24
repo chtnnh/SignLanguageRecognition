@@ -7,8 +7,10 @@ import android.graphics.ImageFormat
 import android.graphics.Matrix
 import android.graphics.Rect
 import android.graphics.YuvImage
+import android.util.Log
 import androidx.camera.core.ImageProxy
 import org.tensorflow.lite.Interpreter
+import org.tensorflow.lite.flex.FlexDelegate
 import org.tensorflow.lite.support.common.FileUtil
 import org.tensorflow.lite.support.image.ImageProcessor
 import org.tensorflow.lite.support.image.TensorImage
@@ -27,9 +29,7 @@ class SignLanguageClassifier(private val context: Context) {
     
     // Labels for sign language - you should replace these with your actual labels
     private val labels = listOf(
-        "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
-        "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
-        "del", "nothing", "space"
+        "hello", "i", "you", "yes", "no", "how", "help", "good", "thanks", "goodbye"
     )
     
     init {
@@ -38,33 +38,95 @@ class SignLanguageClassifier(private val context: Context) {
     
     private fun setupInterpreter() {
         try {
-            // Load your .tflite model from assets folder
-            // Make sure to place your model file in app/src/main/assets/
-            val modelFile = FileUtil.loadMappedFile(context, "sign_language_model.tflite")
-            
-            val options = Interpreter.Options().apply {
-                // Use GPU if available
-                setUseNNAPI(true)
-                setNumThreads(4)
+            // Check if model file exists
+            val assetManager = context.assets
+            val modelExists = try {
+                assetManager.open("sign_language_model.tflite").use { true }
+            } catch (e: Exception) {
+                false
             }
             
-            interpreter = Interpreter(modelFile, options)
+            if (!modelExists) {
+                Log.e("SignLanguageClassifier", "Model file 'sign_language_model.tflite' not found in assets folder")
+                return
+            }
+            
+            // Load your .tflite model from assets folder
+            val modelFile = FileUtil.loadMappedFile(context, "sign_language_model.tflite")
+            
+            // Try multiple interpreter configurations
+            interpreter = tryCreateInterpreter(modelFile)
             
             // Get input tensor dimensions
             val inputShape = interpreter?.getInputTensor(0)?.shape()
             inputShape?.let {
-                // Expecting input shape: [30, 1662]
-                sequenceLength = it[0] // Number of frames (30)
-                featureSize = it[1] // Feature vector size (1662)
+                // Expecting input shape: [30, 1662] or similar
+                if (it.size >= 2) {
+                    sequenceLength = it[it.size - 2] // Second to last dimension
+                    featureSize = it[it.size - 1] // Last dimension
+                    Log.d("SignLanguageClassifier", "Model loaded successfully. Input shape: [${it.joinToString(", ")}]")
+                    Log.d("SignLanguageClassifier", "Interpreted as: sequenceLength=$sequenceLength, featureSize=$featureSize")
+                }
             }
             
         } catch (e: Exception) {
+            Log.e("SignLanguageClassifier", "Error loading model: ${e.message}", e)
             e.printStackTrace()
         }
     }
     
+    private fun tryCreateInterpreter(modelFile: java.nio.MappedByteBuffer): Interpreter? {
+        // Try 1: Standard interpreter
+        try {
+            val options = Interpreter.Options().apply {
+                setUseNNAPI(false) // Disable NNAPI initially
+                setNumThreads(4)
+            }
+            val interpreter = Interpreter(modelFile, options)
+            Log.d("SignLanguageClassifier", "✅ Standard interpreter created successfully")
+            return interpreter
+        } catch (e: Exception) {
+            Log.w("SignLanguageClassifier", "❌ Standard interpreter failed: ${e.message}")
+        }
+        
+        // Try 2: Flex delegate for TensorFlow ops
+        try {
+            val flexDelegate = FlexDelegate()
+            val options = Interpreter.Options().apply {
+                addDelegate(flexDelegate)
+                setUseNNAPI(false)
+                setNumThreads(4)
+            }
+            val interpreter = Interpreter(modelFile, options)
+            Log.d("SignLanguageClassifier", "✅ Flex delegate interpreter created successfully")
+            return interpreter
+        } catch (e: Exception) {
+            Log.w("SignLanguageClassifier", "❌ Flex delegate interpreter failed: ${e.message}")
+        }
+        
+        // Try 3: CPU only, no delegates
+        try {
+            val options = Interpreter.Options().apply {
+                setUseNNAPI(false)
+                setUseXNNPACK(false)
+                setNumThreads(1)
+            }
+            val interpreter = Interpreter(modelFile, options)
+            Log.d("SignLanguageClassifier", "✅ CPU-only interpreter created successfully")
+            return interpreter
+        } catch (e: Exception) {
+            Log.e("SignLanguageClassifier", "❌ All interpreter creation attempts failed: ${e.message}")
+        }
+        
+        return null
+    }
+    
     fun classify(image: ImageProxy): String {
         return try {
+            if (interpreter == null) {
+                return "❌ Model not loaded. Please add 'sign_language_model.tflite' to assets folder"
+            }
+            
             val features = extractFeaturesFromImage(image)
             addFeaturesToBuffer(features)
             
@@ -133,104 +195,127 @@ class SignLanguageClassifier(private val context: Context) {
                     return "Not enough frames"
                 }
                 
-                // Take the latest 30 feature vectors
+                // Take the latest feature vectors up to sequence length
                 val sequence = features.takeLast(sequenceLength)
                 
-                // Convert sequence to input tensor [30, 1662]
+                // Convert sequence to input tensor with correct shape
                 val inputBuffer = convertSequenceToBuffer(sequence)
                 
                 // Prepare output
                 val outputShape = interpreter.getOutputTensor(0).shape()
-                val outputBuffer = Array(1) { FloatArray(outputShape[1]) }
+                val outputSize = if (outputShape.size > 1) outputShape[1] else outputShape[0]
+                
+                Log.d("SignLanguageClassifier", "Output shape: [${outputShape.joinToString(", ")}], output size: $outputSize")
+                
+                // Create output array that matches the expected output shape
+                val outputBuffer = when (outputShape.size) {
+                    1 -> FloatArray(outputSize)
+                    2 -> Array(1) { FloatArray(outputSize) }
+                    else -> Array(1) { FloatArray(outputSize) }
+                }
                 
                 // Run inference
                 interpreter.run(inputBuffer, outputBuffer)
                 
-                // Get prediction
-                val predictions = outputBuffer[0]
+                // Extract predictions based on output format
+                val predictions = when (outputBuffer) {
+                    is FloatArray -> outputBuffer
+                    is Array<*> -> (outputBuffer[0] as FloatArray)
+                    else -> {
+                        Log.e("SignLanguageClassifier", "Unexpected output buffer type")
+                        return "❌ Output format error"
+                    }
+                }
+                
                 val maxIndex = predictions.indices.maxByOrNull { predictions[it] } ?: -1
                 
                 if (maxIndex >= 0 && maxIndex < labels.size) {
                     val confidence = predictions[maxIndex]
-                    "${labels[maxIndex]} (${String.format("%.2f", confidence * 100)}%)"
+                    "✅ ${labels[maxIndex]} (${String.format("%.2f", confidence * 100)}%)"
                 } else {
-                    "Unknown"
+                    "❓ Unknown prediction (index: $maxIndex, predictions: ${predictions.size})"
                 }
-            } ?: "Model not loaded"
+            } ?: "❌ Model not loaded - add .tflite file to assets folder"
         } catch (e: Exception) {
+            Log.e("SignLanguageClassifier", "Classification error: ${e.message}", e)
             e.printStackTrace()
-            "Classification error: ${e.message}"
+            "❌ Classification error: ${e.message}"
         }
     }
     
-    private fun convertSequenceToBuffer(sequence: List<FloatArray>): Array<FloatArray> {
-        // Input shape: [30, 1662]
-        val inputArray = Array(sequenceLength) { FloatArray(featureSize) }
-        
-        for (frameIndex in 0 until sequenceLength) {
-            val features = if (frameIndex < sequence.size) {
-                sequence[frameIndex]
-            } else {
-                // If we don't have enough frames, repeat the last frame
-                sequence.lastOrNull() ?: FloatArray(featureSize)
-            }
+    private fun convertSequenceToBuffer(sequence: List<FloatArray>): Any {
+        interpreter?.let { interpreter ->
+            val inputShape = interpreter.getInputTensor(0).shape()
+            Log.d("SignLanguageClassifier", "Converting sequence for input shape: [${inputShape.joinToString(", ")}]")
             
-            // Copy features to input array
-            for (i in 0 until featureSize) {
-                inputArray[frameIndex][i] = if (i < features.size) features[i] else 0f
-            }
-        }
-        
-        return inputArray
-    }
-    
-    private fun convertSequenceToByteBuffer(sequence: List<Bitmap>): ByteBuffer {
-        // Input shape: [1, sequence_length, height, width, channels]
-        val byteBuffer = ByteBuffer.allocateDirect(
-            4 * 1 * sequenceLength * inputImageHeight * inputImageWidth * 3
-        )
-        byteBuffer.order(ByteOrder.nativeOrder())
-        
-        for (frameIndex in 0 until sequenceLength) {
-            val bitmap = if (frameIndex < sequence.size) {
-                sequence[frameIndex]
-            } else {
-                // If we don't have enough frames, repeat the last frame
-                sequence.lastOrNull() ?: return byteBuffer
-            }
-            
-            val intValues = IntArray(inputImageWidth * inputImageHeight)
-            bitmap.getPixels(intValues, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
-            
-            var pixel = 0
-            for (i in 0 until inputImageHeight) {
-                for (j in 0 until inputImageWidth) {
-                    val pixelValue = intValues[pixel++]
+            return when (inputShape.size) {
+                2 -> {
+                    // Shape: [30, 1662] - Direct 2D array
+                    Log.d("SignLanguageClassifier", "Using 2D array format")
+                    val inputArray = Array(sequenceLength) { FloatArray(featureSize) }
                     
-                    // Normalize pixel values to [0, 1]
-                    byteBuffer.putFloat(((pixelValue shr 16) and 0xFF) / 255.0f) // R
-                    byteBuffer.putFloat(((pixelValue shr 8) and 0xFF) / 255.0f)  // G
-                    byteBuffer.putFloat((pixelValue and 0xFF) / 255.0f)          // B
+                    for (frameIndex in 0 until sequenceLength) {
+                        val features = if (frameIndex < sequence.size) {
+                            sequence[frameIndex]
+                        } else {
+                            sequence.lastOrNull() ?: FloatArray(featureSize)
+                        }
+                        
+                        for (i in 0 until featureSize) {
+                            inputArray[frameIndex][i] = if (i < features.size) features[i] else 0f
+                        }
+                    }
+                    inputArray
+                }
+                
+                3 -> {
+                    // Shape: [1, 30, 1662] - 3D array with batch dimension
+                    Log.d("SignLanguageClassifier", "Using 3D array format with batch dimension")
+                    val inputArray = Array(1) { Array(sequenceLength) { FloatArray(featureSize) } }
+                    
+                    for (frameIndex in 0 until sequenceLength) {
+                        val features = if (frameIndex < sequence.size) {
+                            sequence[frameIndex]
+                        } else {
+                            sequence.lastOrNull() ?: FloatArray(featureSize)
+                        }
+                        
+                        for (i in 0 until featureSize) {
+                            inputArray[0][frameIndex][i] = if (i < features.size) features[i] else 0f
+                        }
+                    }
+                    inputArray
+                }
+                
+                4 -> {
+                    // Shape: [1, 30, 1662, 1] - 4D array (batch, sequence, features, channel)
+                    Log.d("SignLanguageClassifier", "Using 4D array format")
+                    val inputArray = Array(1) { Array(sequenceLength) { Array(featureSize) { FloatArray(1) } } }
+                    
+                    for (frameIndex in 0 until sequenceLength) {
+                        val features = if (frameIndex < sequence.size) {
+                            sequence[frameIndex]
+                        } else {
+                            sequence.lastOrNull() ?: FloatArray(featureSize)
+                        }
+                        
+                        for (i in 0 until featureSize) {
+                            inputArray[0][frameIndex][i][0] = if (i < features.size) features[i] else 0f
+                        }
+                    }
+                    inputArray
+                }
+                
+                else -> {
+                    Log.e("SignLanguageClassifier", "Unsupported input shape: [${inputShape.joinToString(", ")}]")
+                    // Fallback to 2D array
+                    Array(sequenceLength) { FloatArray(featureSize) }
                 }
             }
         }
         
-        return byteBuffer
-    }
-    
-    private fun imageProxyToBitmap(image: ImageProxy): Bitmap {
-        val buffer = image.planes[0].buffer
-        val bytes = ByteArray(buffer.remaining())
-        buffer.get(bytes)
-        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-    }
-    
-    fun clearFrameBuffer() {
-        frameBuffer.clear()
-    }
-    
-    fun getFrameCount(): Int {
-        return frameBuffer.size
+        // Fallback if interpreter is null
+        return Array(sequenceLength) { FloatArray(featureSize) }
     }
     
     // Method to process a complete video sequence (for recorded videos)
@@ -240,6 +325,8 @@ class SignLanguageClassifier(private val context: Context) {
                 return "Video too short: ${bitmaps.size} frames, need $sequenceLength"
             }
             
+            Log.d("SignLanguageClassifier", "Processing video with ${bitmaps.size} frames")
+            
             // Take evenly spaced frames if we have more than needed
             val selectedFrames = if (bitmaps.size == sequenceLength) {
                 bitmaps
@@ -247,64 +334,57 @@ class SignLanguageClassifier(private val context: Context) {
                 selectFramesFromVideo(bitmaps, sequenceLength)
             }
             
+            Log.d("SignLanguageClassifier", "Selected ${selectedFrames.size} frames for processing")
+            
             // Extract features from all frames
             val featureSequence = selectedFrames.map { bitmap -> 
                 extractFeaturesFromBitmap(bitmap) 
             }
+            
+            Log.d("SignLanguageClassifier", "Extracted features for ${featureSequence.size} frames")
             
             // Run inference
             interpreter?.let { interpreter ->
                 val inputBuffer = convertSequenceToBuffer(featureSequence)
                 
                 val outputShape = interpreter.getOutputTensor(0).shape()
-                val outputBuffer = Array(1) { FloatArray(outputShape[1]) }
+                val outputSize = if (outputShape.size > 1) outputShape[1] else outputShape[0]
+                
+                Log.d("SignLanguageClassifier", "Video classification - Output shape: [${outputShape.joinToString(", ")}]")
+                
+                // Create output array that matches the expected output shape
+                val outputBuffer = when (outputShape.size) {
+                    1 -> FloatArray(outputSize)
+                    2 -> Array(1) { FloatArray(outputSize) }
+                    else -> Array(1) { FloatArray(outputSize) }
+                }
                 
                 interpreter.run(inputBuffer, outputBuffer)
                 
-                val predictions = outputBuffer[0]
+                // Extract predictions based on output format
+                val predictions = when (outputBuffer) {
+                    is FloatArray -> outputBuffer
+                    is Array<*> -> (outputBuffer[0] as FloatArray)
+                    else -> {
+                        Log.e("SignLanguageClassifier", "Unexpected output buffer type in video classification")
+                        return "❌ Video output format error"
+                    }
+                }
+                
                 val maxIndex = predictions.indices.maxByOrNull { predictions[it] } ?: -1
                 
                 if (maxIndex >= 0 && maxIndex < labels.size) {
                     val confidence = predictions[maxIndex]
-                    "${labels[maxIndex]} (${String.format("%.2f", confidence * 100)}%)"
+                    "✅ Video: ${labels[maxIndex]} (${String.format("%.2f", confidence * 100)}%)"
                 } else {
-                    "Unknown"
+                    "❓ Video: Unknown prediction (index: $maxIndex)"
                 }
-            } ?: "Model not loaded"
+            } ?: "❌ Model not loaded"
             
         } catch (e: Exception) {
+            Log.e("SignLanguageClassifier", "Video classification error: ${e.message}", e)
             e.printStackTrace()
-            "Video classification error: ${e.message}"
-        }
-    }
-    
-    // Method to process feature vectors directly (if you have pre-extracted features)
-    fun classifyFeatureSequence(featureSequence: Array<FloatArray>): String {
-        return try {
-            if (featureSequence.size != sequenceLength) {
-                return "Invalid sequence length: ${featureSequence.size}, expected $sequenceLength"
-            }
-            
-            interpreter?.let { interpreter ->
-                val outputShape = interpreter.getOutputTensor(0).shape()
-                val outputBuffer = Array(1) { FloatArray(outputShape[1]) }
-                
-                interpreter.run(featureSequence, outputBuffer)
-                
-                val predictions = outputBuffer[0]
-                val maxIndex = predictions.indices.maxByOrNull { predictions[it] } ?: -1
-                
-                if (maxIndex >= 0 && maxIndex < labels.size) {
-                    val confidence = predictions[maxIndex]
-                    "${labels[maxIndex]} (${String.format("%.2f", confidence * 100)}%)"
-                } else {
-                    "Unknown"
-                }
-            } ?: "Model not loaded"
-            
-        } catch (e: Exception) {
-            e.printStackTrace()
-            "Feature classification error: ${e.message}"
+            "❌ Video classification error: ${e.message}"
         }
     }
     

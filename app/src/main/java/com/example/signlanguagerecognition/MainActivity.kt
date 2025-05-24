@@ -70,6 +70,14 @@ class MainActivity : AppCompatActivity() {
         signLanguageClassifier = SignLanguageClassifier(this)
         videoProcessor = VideoProcessor(this)
         
+        // Inspect model (for debugging)
+        val modelInspector = ModelInspector(this)
+        val modelReport = modelInspector.inspectModel()
+        Log.d("MainActivity", modelReport)
+        
+        // Show model info in UI initially
+        viewBinding.predictionText.text = "Model Info:\n$modelReport"
+        
         // Request camera permissions
         if (allPermissionsGranted()) {
             startCamera()

@@ -1,3 +1,21 @@
+package com.example.signlanguagerecognition
+
+import android.content.Context
+import android.graphics.Bitmap
+import android.media.MediaMetadataRetriever
+import android.net.Uri
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+
+class VideoProcessor(private val context: Context) {
+    
+    companion object {
+        private const val TARGET_FRAME_COUNT = 30
+    }
+    
+    suspend fun extractFramesFromVideo(videoUri: Uri): List<Bitmap> = withContext(Dispatchers.IO) {
+        val frames = mutableListOf<Bitmap>()
+        val retriever = MediaMetadataRetriever()
         
         try {
             retriever.setDataSource(context, videoUri)
@@ -50,7 +68,7 @@
                 return@withContext "Only extracted ${frames.size} frames, need $TARGET_FRAME_COUNT"
             }
             
-            // Resize frames to 300x1662 and classify
+            // Process frames with classifier
             val result = classifier.classifyVideoSequence(frames)
             
             // Clean up bitmaps

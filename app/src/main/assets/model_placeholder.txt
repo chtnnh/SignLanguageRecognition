@@ -1,0 +1,12 @@
+# This is a placeholder file for the TensorFlow Lite model
+# Replace this with your actual .tflite model file
+
+# Your model should:
+# - Accept input shape [30, 1662] 
+# - Output classification probabilities
+# - Be named exactly "sign_language_model.tflite"
+
+# To add your real model:
+# 1. Place your .tflite file here
+# 2. Rename it to "sign_language_model.tflite"
+# 3. Rebuild the app
