@@ -24,13 +24,14 @@ class SignLanguageClassifier(private val context: Context) {
     
     private var interpreter: Interpreter? = null
     private var sequenceLength: Int = 30
-    private var featureSize: Int = 1662
+    private var featureSize: Int = 226
     private var frameBuffer: ConcurrentLinkedQueue<FloatArray> = ConcurrentLinkedQueue()
     private var mediaPipeExtractor: MediaPipeFeatureExtractor? = null
     
     // Labels for sign language - you should replace these with your actual labels
     private val labels = listOf(
-        "hello", "i", "you", "yes", "no", "how", "help", "good", "thanks", "goodbye"
+        // "hello", "i", "you", "yes", "no", "how", "help", "good", "thanks", "goodbye"
+        "idle", "hello", "good"
     )
     
     init {

@@ -11,16 +11,16 @@ class MediaPipeFeatureExtractor(private val context: Context) {
     companion object {
         private const val TAG = "MediaPipeExtractor"
         
-        // MediaPipe landmarks counts (matching your training data)
+        // MediaPipe landmarks counts (optimized for 226 features)
         private const val HAND_LANDMARKS = 21
         private const val POSE_LANDMARKS = 33
         private const val COORDS_PER_LANDMARK = 3 // x, y, z
         
-        // Feature dimensions
-        private const val HAND_FEATURES = HAND_LANDMARKS * COORDS_PER_LANDMARK * 2 // 2 hands = 126
+        // Feature dimensions for 226 total features
+        private const val HAND_FEATURES = HAND_LANDMARKS * COORDS_PER_LANDMARK * 1 // 1 hand = 63
         private const val POSE_FEATURES = POSE_LANDMARKS * COORDS_PER_LANDMARK // = 99
-        private const val DERIVED_FEATURES = 1437 // Distances, angles, velocities, etc.
-        private const val TOTAL_FEATURES = HAND_FEATURES + POSE_FEATURES + DERIVED_FEATURES // = 1662
+        private const val DERIVED_FEATURES = 64 // Distances, angles, velocities, etc.
+        private const val TOTAL_FEATURES = HAND_FEATURES + POSE_FEATURES + DERIVED_FEATURES // = 226
     }
     
     fun initialize() {
@@ -29,42 +29,41 @@ class MediaPipeFeatureExtractor(private val context: Context) {
     }
     
     fun extractFeatures(bitmap: Bitmap): FloatArray {
-        Log.d(TAG, "Extracting MediaPipe-style features from ${bitmap.width}x${bitmap.height} bitmap")
+        Log.d(TAG, "Extracting 226-dimensional features from ${bitmap.width}x${bitmap.height} bitmap")
         
-        val features = FloatArray(1662)
+        val features = FloatArray(226)
         var index = 0
         
-        // Simulate hand landmark extraction (126 features)
+        // Simulate primary hand landmark extraction (63 features)
         index = simulateHandFeatures(bitmap, features, index)
         
         // Simulate pose landmark extraction (99 features)  
         index = simulatePoseFeatures(bitmap, features, index)
         
-        // Simulate derived features (1437 features)
+        // Simulate derived features (64 features)
         index = simulateDerivedFeatures(bitmap, features, index)
         
-        Log.d(TAG, "Generated ${features.size} MediaPipe-style features")
+        Log.d(TAG, "Generated ${features.size} features (expected 226)")
         return features
     }
     
     private fun simulateHandFeatures(bitmap: Bitmap, features: FloatArray, startIndex: Int): Int {
         var index = startIndex
         
-        // Simulate 2 hands × 21 landmarks × 3 coordinates = 126 features
-        for (handIndex in 0 until 2) {
-            for (landmarkIndex in 0 until HAND_LANDMARKS) {
-                // Create realistic hand landmark coordinates
-                // Hand landmarks typically range from 0.0 to 1.0 (normalized)
-                val baseX = if (handIndex == 0) 0.3f else 0.7f // Left vs right hand
-                val baseY = 0.5f
-                
-                // Add variation based on bitmap content and landmark position
-                val pixelSample = sampleBitmapRegion(bitmap, baseX, baseY, 0.1f)
-                
-                features[index++] = baseX + (pixelSample * 0.2f - 0.1f) // x coordinate
-                features[index++] = baseY + (Random.nextFloat() * 0.3f - 0.15f) // y coordinate  
-                features[index++] = Random.nextFloat() * 0.1f // z coordinate (depth)
-            }
+        // Simulate 1 dominant hand × 21 landmarks × 3 coordinates = 63 features
+        // Focus on the dominant hand for simplicity
+        for (landmarkIndex in 0 until HAND_LANDMARKS) {
+            // Create realistic hand landmark coordinates
+            // Hand landmarks typically range from 0.0 to 1.0 (normalized)
+            val baseX = 0.5f // Center dominant hand
+            val baseY = 0.5f
+            
+            // Add variation based on bitmap content and landmark position
+            val pixelSample = sampleBitmapRegion(bitmap, baseX, baseY, 0.1f)
+            
+            features[index++] = baseX + (pixelSample * 0.3f - 0.15f) // x coordinate
+            features[index++] = baseY + (Random.nextFloat() * 0.4f - 0.2f) // y coordinate  
+            features[index++] = Random.nextFloat() * 0.1f // z coordinate (depth)
         }
         
         Log.d(TAG, "Generated hand features: ${index - startIndex}")
@@ -100,39 +99,40 @@ class MediaPipeFeatureExtractor(private val context: Context) {
     private fun simulateDerivedFeatures(bitmap: Bitmap, features: FloatArray, startIndex: Int): Int {
         var index = startIndex
         
-        // Simulate derived features that would come from MediaPipe preprocessing
+        // Simulate 64 derived features (much more manageable than 1437)
         // These represent distances, angles, velocities, etc.
         
         // Sample different regions of the bitmap to create varied features
         val regions = listOf(
-            Pair(0.2f, 0.3f), // Left hand region
-            Pair(0.8f, 0.3f), // Right hand region
+            Pair(0.5f, 0.3f), // Dominant hand region
             Pair(0.5f, 0.2f), // Head region
             Pair(0.5f, 0.6f), // Body region
+            Pair(0.3f, 0.4f), // Left side
+            Pair(0.7f, 0.4f), // Right side
         )
+        
+        // Create 64 derived features from these regions
+        val featuresPerRegion = DERIVED_FEATURES / regions.size // ~12-13 features per region
         
         for (regionIndex in regions.indices) {
             val (x, y) = regions[regionIndex]
             val regionSample = sampleBitmapRegion(bitmap, x, y, 0.1f)
             
-            // Create multiple derived features per region
-            val featuresPerRegion = DERIVED_FEATURES / regions.size
-            
             for (i in 0 until featuresPerRegion) {
-                if (index < 1662) {
+                if (index < 226) {
                     // Mix bitmap sampling with position-based features
                     val positionFactor = (i.toFloat() / featuresPerRegion) * 2 - 1 // -1 to 1
-                    features[index++] = regionSample * 0.5f + positionFactor * 0.3f + Random.nextFloat() * 0.1f - 0.05f
+                    features[index++] = regionSample * 0.6f + positionFactor * 0.3f + Random.nextFloat() * 0.1f - 0.05f
                 }
             }
         }
         
-        // Fill any remaining features
-        while (index < 1662) {
+        // Fill any remaining features to reach exactly 226
+        while (index < 226) {
             features[index++] = Random.nextFloat() * 0.2f - 0.1f
         }
         
-        Log.d(TAG, "Generated derived features: ${index - startIndex}")
+        Log.d(TAG, "Generated derived features: ${index - startIndex}, total index: $index")
         return index
     }
     
