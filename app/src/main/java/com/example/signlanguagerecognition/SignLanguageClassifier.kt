@@ -24,7 +24,7 @@ class SignLanguageClassifier(private val context: Context) {
     
     private var interpreter: Interpreter? = null
     private var sequenceLength: Int = 30
-    private var featureSize: Int = 226
+    private var featureSize: Int = 226  // Fixed: matches training data exactly
     private var frameBuffer: ConcurrentLinkedQueue<FloatArray> = ConcurrentLinkedQueue()
     private var mediaPipeExtractor: MediaPipeFeatureExtractor? = null
     
@@ -73,12 +73,17 @@ class SignLanguageClassifier(private val context: Context) {
             // Get input tensor dimensions
             val inputShape = interpreter?.getInputTensor(0)?.shape()
             inputShape?.let {
-                // Expecting input shape: [30, 1662] or similar
+                // Expecting input shape: [1, 30, 226] for batch, sequence, features
                 if (it.size >= 2) {
-                    sequenceLength = it[it.size - 2] // Second to last dimension
-                    featureSize = it[it.size - 1] // Last dimension
+                    sequenceLength = it[it.size - 2] // Second to last dimension (30)
+                    featureSize = it[it.size - 1] // Last dimension (226)
                     Log.d("SignLanguageClassifier", "Model loaded successfully. Input shape: [${it.joinToString(", ")}]")
                     Log.d("SignLanguageClassifier", "Interpreted as: sequenceLength=$sequenceLength, featureSize=$featureSize")
+                    
+                    // Verify feature size matches training expectation
+                    if (featureSize != 226) {
+                        Log.w("SignLanguageClassifier", "⚠️ Model expects $featureSize features, but training used 226. Check model conversion.")
+                    }
                 }
             }
             
@@ -155,30 +160,63 @@ class SignLanguageClassifier(private val context: Context) {
     }
     
     private fun extractFeaturesFromImage(image: ImageProxy): FloatArray {
-        // Convert ImageProxy to feature vector of size 1662
-        // This is a placeholder - you need to implement the actual feature extraction
-        // that matches your model's preprocessing
+        // Convert ImageProxy to feature vector of size 226 (matching training)
+        // Uses MediaPipe Holistic detection to extract pose + hand landmarks
         val bitmap = imageProxyToBitmap(image)
         return extractFeaturesFromBitmap(bitmap)
     }
     
     private fun extractFeaturesFromBitmap(bitmap: Bitmap): FloatArray {
-        // Use MediaPipe for feature extraction (matches your training data)
-        return mediaPipeExtractor?.extractFeatures(bitmap) ?: run {
+        // Use MediaPipe for feature extraction (matches your training data exactly)
+        val features = mediaPipeExtractor?.extractFeatures(bitmap) ?: run {
             Log.w("SignLanguageClassifier", "MediaPipe extractor not available, using fallback")
             createFallbackFeatures()
         }
+        
+        // DEBUG: Log feature extraction source
+        Log.d("SignLanguageClassifier", "Feature extraction: ${if (mediaPipeExtractor?.isReady() == true) "MediaPipe" else "Fallback"}")
+        Log.d("SignLanguageClassifier", "Feature size: ${features.size}, expected: $featureSize")
+        Log.d("SignLanguageClassifier", "Feature range: ${features.minOrNull()} to ${features.maxOrNull()}")
+        Log.d("SignLanguageClassifier", "First 10 features: ${features.take(10)}")
+        
+        return features
     }
     
     private fun createFallbackFeatures(): FloatArray {
         Log.w("SignLanguageClassifier", "Using fallback feature extraction")
         val features = FloatArray(featureSize)
         
-        // Create small random features as fallback when MediaPipe fails
+        // Create realistic fallback features matching training structure:
+        // Pose (100) + Left Hand (63) + Right Hand (63) = 226 features
         val random = kotlin.random.Random.Default
-        for (i in features.indices) {
-            features[i] = random.nextFloat() * 0.2f - 0.1f
+        var index = 0
+        
+        // Pose landmarks (100 features: 25 landmarks × 4 values each)
+        repeat(25) {
+            features[index++] = 0.5f + random.nextFloat() * 0.2f - 0.1f // x
+            features[index++] = 0.5f + random.nextFloat() * 0.4f - 0.2f // y  
+            features[index++] = random.nextFloat() * 0.1f - 0.05f        // z
+            features[index++] = 0.8f + random.nextFloat() * 0.2f         // visibility
         }
+        
+        // Left hand landmarks (63 features: 21 landmarks × 3 values each)
+        repeat(21) {
+            features[index++] = 0.4f + random.nextFloat() * 0.2f - 0.1f // x (left side)
+            features[index++] = 0.5f + random.nextFloat() * 0.2f - 0.1f // y
+            features[index++] = random.nextFloat() * 0.1f - 0.05f        // z
+        }
+        
+        // Right hand landmarks (63 features: 21 landmarks × 3 values each)  
+        repeat(21) {
+            features[index++] = 0.6f + random.nextFloat() * 0.2f - 0.1f // x (right side)
+            features[index++] = 0.5f + random.nextFloat() * 0.2f - 0.1f // y
+            features[index++] = random.nextFloat() * 0.1f - 0.05f        // z
+        }
+        
+        // DEBUG: Log fallback feature details
+        Log.d("SignLanguageClassifier", "Generated fallback features - size: ${features.size}")
+        Log.d("SignLanguageClassifier", "Fallback feature range: ${features.minOrNull()} to ${features.maxOrNull()}")
+        Log.d("SignLanguageClassifier", "Fallback first 10: ${features.take(10)}")
         
         return features
     }
@@ -232,13 +270,30 @@ class SignLanguageClassifier(private val context: Context) {
                     }
                 }
                 
+                // DEBUG: Log all prediction values to diagnose the issue
+                Log.d("SignLanguageClassifier", "=== PREDICTION DEBUG ===")
+                Log.d("SignLanguageClassifier", "Raw predictions: ${predictions.contentToString()}")
+                Log.d("SignLanguageClassifier", "Prediction details:")
+                for (i in predictions.indices) {
+                    if (i < labels.size) {
+                        Log.d("SignLanguageClassifier", "  [$i] ${labels[i]}: ${predictions[i]} (${String.format("%.2f", predictions[i] * 100)}%)")
+                    } else {
+                        Log.d("SignLanguageClassifier", "  [$i] UNKNOWN_LABEL: ${predictions[i]}")
+                    }
+                }
+                
                 val maxIndex = predictions.indices.maxByOrNull { predictions[it] } ?: -1
+                Log.d("SignLanguageClassifier", "Max prediction index: $maxIndex")
                 
                 if (maxIndex >= 0 && maxIndex < labels.size) {
                     val confidence = predictions[maxIndex]
-                    "✅ ${labels[maxIndex]} (${String.format("%.2f", confidence * 100)}%)"
+                    val result = "✅ ${labels[maxIndex]} (${String.format("%.2f", confidence * 100)}%)"
+                    Log.d("SignLanguageClassifier", "Final prediction: $result")
+                    result
                 } else {
-                    "❓ Unknown prediction (index: $maxIndex, predictions: ${predictions.size})"
+                    val result = "❓ Unknown prediction (index: $maxIndex, predictions: ${predictions.size}, labels: ${labels.size})"
+                    Log.e("SignLanguageClassifier", result)
+                    result
                 }
             } ?: "❌ Model not loaded - add .tflite file to assets folder"
         } catch (e: Exception) {
